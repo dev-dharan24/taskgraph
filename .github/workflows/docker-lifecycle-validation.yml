@@ -1,0 +1,43 @@
+name: Docker lifecycle validation
+
+on:
+  push:
+    branches:
+      - docker-lifecycle-validation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  attached-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate attached-client cleanup behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="task-lifecycle-$RANDOM"
+          cleanup() {
+            docker rm --force "$name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker version --format 'Client={{.Client.Version}} Server={{.Server.Version}} API={{.Server.APIVersion}}'
+          docker run --name "$name" alpine:3.21 sh -c 'while :; do sleep 1; done' >/tmp/docker-client.log 2>&1 &
+          client_pid=$!
+
+          for _ in $(seq 1 30); do
+            if [ "$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null || true)" = "true" ]; then
+              break
+            fi
+            sleep 0.2
+          done
+
+          kill -KILL "$client_pid"
+          wait "$client_pid" 2>/dev/null || true
+
+          state="$(docker inspect --format '{{.State.Running}}' "$name")"
+          echo "CLIENT_KILLED_CONTAINER_RUNNING=$state"
+          test "$state" = "true"
